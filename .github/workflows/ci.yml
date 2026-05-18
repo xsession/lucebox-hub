@@ -64,7 +64,7 @@ jobs:
 
       - name: Run Python server unit tests
         run: |
-          pip install pytest fastapi httpx
+          pip install pytest fastapi httpx transformers
           cd dflash/scripts
           python3 -m pytest test_server.py -v
 
