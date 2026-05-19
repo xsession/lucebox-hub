@@ -547,7 +547,8 @@ int Qwen35Backend::do_prefill(const std::vector<int32_t> & tokens,
             const int win_start = 0;
             const int kv_len = kv_pos + n_tokens - win_start;
             std::vector<uint16_t> mask_buf;
-            build_causal_mask(mask_buf, kv_len, n_tokens, kv_pos, cfg_.kq_stride_pad, win_start);
+            const int kv_pad_override = (int)sg_.attn_mask->ne[0];
+            build_causal_mask(mask_buf, kv_len, n_tokens, kv_pos, cfg_.kq_stride_pad, win_start, kv_pad_override);
             ggml_backend_tensor_set(sg_.attn_mask, mask_buf.data(), 0,
                                     sizeof(uint16_t) * mask_buf.size());
         }
@@ -762,7 +763,8 @@ bool Qwen35Backend::do_spec_decode(int committed, int n_gen,
 
         if (!build_draft_step(draft_sg, dw_, /*lm_head=*/nullptr, draft_backend_,
                               draft_ctx, use_mirror_view ? &feature_mirror_ : nullptr,
-                              committed)) {
+                              committed,
+                              /*ctx_len_max=*/std::min(ring_cap, std::max(DRAFT_CTX_MAX_DEFAULT, cfg_.draft_ctx_max)))) {
             std::fprintf(stderr, "spec-decode: draft build failed\n");
             step_graph_destroy(draft_sg);
             return false;

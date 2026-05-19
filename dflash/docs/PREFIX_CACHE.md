@@ -170,9 +170,25 @@ free_snapshot_backend(snap_backend_, compute_backend_);  // then backend
 
 | Server flag | Default | Description |
 |-------------|---------|-------------|
-| `--prefix-cache-cap N` | 4 | Max inline prefix cache slots |
+| `--prefix-cache-cap N` | 32 | Max inline prefix cache slots |
 | `--prefix-cache-full N` | 0 | Max full-compress cache slots |
 | `--skip-park` | false | Skip parking draft model during compress |
+
+### Choosing `--prefix-cache-cap`
+
+With right-sized, CPU-resident snapshots the limiting resource is **system RAM**,
+not VRAM. Each slot costs approximately `cur_pos × 5 KB` (for Qwen3.5-27B Q8_0 KV),
+so 32 slots with an average prefix of 2000 tokens ≈ 320 MB of system RAM — negligible
+on most workstations.
+
+| Scenario | Typical prefix length | Recommended cap |
+|----------|----------------------|-----------------|
+| Single-user chat | 200–2000 tokens | 16–32 |
+| Multi-session agent | 500–5000 tokens | 32–64 |
+| Batch / benchmark | N/A (cold starts) | 4 |
+
+The hard limit is `MAX_SLOTS = 64`. Beyond that, increase the constant in
+`prefix_cache.h` and `model_backend.h`.
 
 ## File Map
 
@@ -189,16 +205,19 @@ free_snapshot_backend(snap_backend_, compute_backend_);  // then backend
 
 ### Save (prefill → snapshot)
 - **Unified memory**: Near-instant (just memcpy, no PCIe)
-- **Discrete GPU**: PCIe transfer at ~12 GB/s (e.g., 1.5 GB → ~125ms)
+- **Discrete GPU**: PCIe transfer (right-sized: typically < 1ms for short prefixes)
 - Amortized over the full prefill time (typically seconds for long prompts)
 
 ### Restore (snapshot → KV cache)
 - **Unified memory**: Near-instant
-- **Discrete GPU**: PCIe transfer (~125ms for 1.5 GB)
+- **Discrete GPU**: PCIe transfer (e.g., 4096 tokens → ~6ms)
 - Always faster than re-computing prefill (which takes seconds)
 
 ### Net Impact
-On discrete GPUs, the snapshot restore adds ~100-200ms latency but avoids
-repeating a multi-second prefill. VRAM stays free for model weights and
-active KV cache, preventing the catastrophic spill-to-system-RAM that
-causes 5× decode slowdowns.
+With right-sized snapshots, typical save/restore transfers are small:
+- cur_pos=265 → ~4.6 MB → < 1ms over PCIe
+- cur_pos=4096 → ~70 MB → ~6ms over PCIe
+
+The old full-size approach (1.5 GB per snapshot) is eliminated. System RAM
+footprint is proportional to actual token count, enabling many more cached
+prefixes with no VRAM cost.

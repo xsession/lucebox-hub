@@ -127,7 +127,7 @@ private:
     DraftFeatureMirror feature_mirror_;
 
     // ── Prefix cache (snapshots) ─────────────────────────────────────
-    static constexpr int PREFIX_SLOTS = 8;
+    static constexpr int PREFIX_SLOTS = 64;
     PrefixSnapshot prefix_snapshots_[PREFIX_SLOTS];
 
     // ── Park state ───────────────────────────────────────────────────

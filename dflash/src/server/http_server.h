@@ -44,7 +44,7 @@ struct ServerConfig {
     int         max_ctx     = 0;        // 0 = use backend's DevicePlacement default (8192)
     bool        enable_cors = true;
     std::string model_name  = "dflash";
-    int         prefix_cache_cap = 4;   // prefix cache slots (0 disables)
+    int         prefix_cache_cap = 32;  // prefix cache slots (0 disables)
 
     // PFlash (speculative prefill compression)
     enum class PflashMode { OFF, AUTO, ALWAYS };

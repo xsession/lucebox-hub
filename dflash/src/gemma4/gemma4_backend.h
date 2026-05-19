@@ -77,7 +77,7 @@ private:
     std::mt19937_64       sampler_rng_{std::random_device{}()};
 
     // Snapshots
-    static constexpr int PREFIX_SLOTS = 8;
+    static constexpr int PREFIX_SLOTS = 64;
     Gemma4Snapshot        snapshots_[PREFIX_SLOTS];
 
     // Prefill prompt tokens in chunks, return committed position.

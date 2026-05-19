@@ -14,7 +14,8 @@ bool build_draft_step(
     ggml_backend_t backend,
     int ctx_len,
     const DraftFeatureMirror * mirror,
-    int committed) {
+    int committed,
+    int /*ctx_len_max*/) {
     step_graph_free(sg);
 
     ggml_init_params ip{};

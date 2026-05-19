@@ -59,7 +59,7 @@ struct FullCacheEntry {
 
 class PrefixCache {
 public:
-    static constexpr int MAX_SLOTS = 8;
+    static constexpr int MAX_SLOTS = 64;
 
     // cap = number of prefix-cache slots (0 disables).
     PrefixCache(int cap, const Tokenizer & tokenizer);
