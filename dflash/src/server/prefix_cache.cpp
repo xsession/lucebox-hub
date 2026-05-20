@@ -25,6 +25,17 @@ bool resolve_chat_markers(const Tokenizer & tok, ChatMarkers & out) {
         return true;
     }
 
+    // Try Gemma family: <|turn> (start) and <turn|> (end) are single tokens.
+    auto turn_start = tok.encode("<|turn>");
+    auto turn_end   = tok.encode("<turn|>");
+    if (turn_start.size() == 1 && turn_end.size() == 1) {
+        out.family = "gemma";
+        out.sys_role_prefix = {turn_start[0]};
+        out.end_msg_seqs = {{turn_end[0]}};
+        out.next_role_starts = {{turn_start[0]}};
+        return true;
+    }
+
     // Try Laguna family: XML-style markers.
     auto start_sys = tok.encode("<system>");
     auto end_sys   = tok.encode("</system>");
