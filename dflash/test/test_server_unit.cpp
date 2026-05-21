@@ -343,6 +343,45 @@ static void test_emitter_tool_buffer_detection() {
     TEST_ASSERT(em.accumulated_text().find("<tool_call>") == std::string::npos);
 }
 
+static void test_emitter_anthropic_tool_use_blocks() {
+    // The Anthropic streaming tool-use branch used to be a no-op; the model
+    // would emit a <tool_call>...</tool_call> block, the parser would detect
+    // it, but no tool_use SSE event was sent. Verify the lifecycle now:
+    //   message_start, content_block_start (text), content_block_stop (text),
+    //   content_block_start (tool_use), content_block_delta (input_json_delta),
+    //   content_block_stop, message_delta(stop_reason="tool_use"), message_stop
+    json tools = json::array();
+    tools.push_back({
+        {"name", "get_weather"},
+        {"description", "weather"},
+        {"input_schema", {{"type", "object"},
+                          {"properties", {{"city", {{"type", "string"}}}}}}}
+    });
+    SseEmitter em(ApiFormat::ANTHROPIC, "req_id", "test-model", 10,
+                  tools, nullptr, /*thinking=*/false);
+    (void)em.emit_start();
+    // Feed Qwen3 XML tool call in chunks so the holdback buffer flushes;
+    // parser will detect <tool_call><function=NAME>...</tool_call>.
+    em.emit_token("<tool_call>\n<function=get_weather>\n");
+    em.emit_token("<parameter=city>\nTokyo\n</parameter>\n");
+    em.emit_token("</function>\n</tool_call>");
+    auto finish = em.emit_finish(20);
+    std::string s = concat(finish);
+
+    TEST_ASSERT(s.find("\"type\":\"tool_use\"")          != std::string::npos);
+    TEST_ASSERT(s.find("\"name\":\"get_weather\"")     != std::string::npos);
+    TEST_ASSERT(s.find("\"type\":\"input_json_delta\"") != std::string::npos);
+    TEST_ASSERT(s.find("Tokyo")                          != std::string::npos);
+    TEST_ASSERT(s.find("\"stop_reason\":\"tool_use\"")  != std::string::npos);
+    TEST_ASSERT(s.find("message_stop")                   != std::string::npos);
+    // Regression guard: at minimum text-block-stop + tool_use-block-stop.
+    size_t n_stop = 0; size_t pos = 0;
+    while ((pos = s.find("content_block_stop", pos)) != std::string::npos) {
+        n_stop++; pos++;
+    }
+    TEST_ASSERT(n_stop >= 2);
+}
+
 static void test_emitter_anthropic_structure() {
     // Verify Anthropic format emits proper event sequence.
     auto em = make_emitter(ApiFormat::ANTHROPIC, false);
@@ -911,6 +950,7 @@ int main() {
     RUN_TEST(test_emitter_reasoning_strips_leading_think_tag);
     RUN_TEST(test_emitter_content_only_no_thinking);
     RUN_TEST(test_emitter_tool_buffer_detection);
+    RUN_TEST(test_emitter_anthropic_tool_use_blocks);
     RUN_TEST(test_emitter_anthropic_structure);
     RUN_TEST(test_emitter_responses_structure);
     RUN_TEST(test_emitter_streaming_openai_has_done);
