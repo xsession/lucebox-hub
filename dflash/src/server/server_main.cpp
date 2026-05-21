@@ -56,7 +56,11 @@ static void print_usage(const char * prog) {
         "KV cache:\n"
         "  --cache-type-k <type>  KV cache K type (f16,bf16,q4_0,q4_1,q5_0,q5_1,q8_0,tq3_0)\n"
         "  --cache-type-v <type>  KV cache V type (same choices as above)\n"
+#ifdef GGML_USE_HIP
+        "                         Default: q4_0 (HIP builds; tq3_0 fattn unsupported)\n"
+#else
         "                         Default: tq3_0 when max_ctx>6144, else q4_0\n"
+#endif
         "\n"
         "PFlash (speculative prefill compression):\n"
         "  --prefill-compression off|auto|always  (default: off)\n"
@@ -175,9 +179,12 @@ int main(int argc, char ** argv) {
 
     // Auto-select TQ3_0 KV cache for large contexts (saves ~40% VRAM).
     // Q4_0 remains default for short contexts where quality matters more.
+    // HIP build skips this: tq3_0 fattn unsupported (ggml-cuda/fattn.cu).
+#ifndef GGML_USE_HIP
     if (sconfig.max_ctx > 6144 && cache_type_k.empty() && cache_type_v.empty()) {
         setenv("DFLASH27B_KV_TQ3", "1", 0);  // don't overwrite user env
     }
+#endif
 
     // PFlash performance defaults: BSA kernel + sparse alpha + full attention window.
     bool pflash_enabled = (sconfig.pflash_mode != ServerConfig::PflashMode::OFF);
@@ -240,9 +247,17 @@ int main(int argc, char ** argv) {
     std::fprintf(stderr, "[server] │  ddtree_budget   = %d\n", bargs.ddtree_budget);
     std::fprintf(stderr, "[server] │  cors            = %s\n", sconfig.enable_cors ? "ON" : "off");
     std::fprintf(stderr, "[server] │  cache_type_k    = %s\n",
+#ifdef GGML_USE_HIP
+        cache_type_k.empty() ? "q4_0 (default, HIP)" : cache_type_k.c_str());
+#else
         cache_type_k.empty() ? (sconfig.max_ctx > 6144 ? "tq3_0 (auto)" : "q4_0 (default)") : cache_type_k.c_str());
+#endif
     std::fprintf(stderr, "[server] │  cache_type_v    = %s\n",
+#ifdef GGML_USE_HIP
+        cache_type_v.empty() ? "q4_0 (default, HIP)" : cache_type_v.c_str());
+#else
         cache_type_v.empty() ? (sconfig.max_ctx > 6144 ? "tq3_0 (auto)" : "q4_0 (default)") : cache_type_v.c_str());
+#endif
     std::fprintf(stderr, "[server] │  pflash          = %s\n",
         sconfig.pflash_mode == ServerConfig::PflashMode::AUTO ? "auto" :
         sconfig.pflash_mode == ServerConfig::PflashMode::ALWAYS ? "always" : "off");
