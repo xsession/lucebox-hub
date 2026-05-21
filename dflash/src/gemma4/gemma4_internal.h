@@ -193,8 +193,11 @@ bool  create_gemma4_target_feat(ggml_backend_t backend, Gemma4Cache & cache,
 // Snapshot
 struct Gemma4Snapshot {
     int cur_pos = 0;
+    int32_t last_tok = -1;
     std::vector<ggml_tensor *> k_snap;
     std::vector<ggml_tensor *> v_snap;
+    ggml_tensor *             feat_snap = nullptr;  // [fc_in, feat_len]
+    int                       feat_cap  = 0;
     ggml_context *        ctx = nullptr;
     ggml_backend_buffer_t buf = nullptr;
 };

@@ -511,6 +511,16 @@ GenerateResult Gemma4Backend::generate(const GenerateRequest & req,
         return result;
     }
 
+    // Inline snapshot at snap_pos for prefix cache
+    if (req.snap_slot >= 0 && req.snap_pos > 0 && req.snap_pos <= committed) {
+        cache_.cur_pos = req.snap_pos;
+        if (snapshot_save(req.snap_slot)) {
+            std::fprintf(stderr, "[gemma4] inline-snap slot=%d cur_pos=%d\n",
+                         req.snap_slot, req.snap_pos);
+        }
+        cache_.cur_pos = committed;
+    }
+
     if (req.n_gen > 0) {
         // Try speculative decode if draft is available and temp==0
         const bool can_spec = dflash_target_
@@ -623,8 +633,15 @@ GenerateResult Gemma4Backend::restore_and_generate(int slot,
         }
     }
 
+    // Restore target_feat from snapshot
+    if (snap.feat_snap && cache_.target_feat) {
+        const size_t feat_nbytes = ggml_nbytes(snap.feat_snap);
+        ggml_backend_tensor_set(cache_.target_feat, snap.feat_snap->data, 0, feat_nbytes);
+    }
+
     const int snap_pos = snap.cur_pos;
     cache_.cur_pos = snap_pos;
+    cache_.last_tok = snap.last_tok;
 
     // Set up sampler
     sampler_ = req.sampler;
@@ -650,6 +667,24 @@ GenerateResult Gemma4Backend::restore_and_generate(int slot,
         return result;
     }
     // else: prompt_len == snap_pos → no delta, committed stays at snap_pos
+
+    // Inline snapshot at snap_pos for prefix cache (new snap from this request)
+    if (req.snap_slot >= 0 && req.snap_pos > 0 && req.snap_pos <= committed) {
+        cache_.cur_pos = req.snap_pos;
+        if (snapshot_save(req.snap_slot)) {
+            std::fprintf(stderr, "[gemma4] inline-snap slot=%d cur_pos=%d\n",
+                         req.snap_slot, req.snap_pos);
+        }
+        cache_.cur_pos = committed;
+    }
+
+    // Full feature mirror resync after restore: do_prefill only synced the
+    // delta [snap_pos..committed). Re-sync the entire [0..committed) range so
+    // the draft model sees correct features for the full context.
+    if (feature_mirror_.target_feat && cache_.target_feat && !draft_parked_ && committed > 0) {
+        draft_feature_mirror_sync_tail(cache_.target_feat, cache_.target_feat_cap,
+                                       feature_mirror_, committed);
+    }
 
     // Generate
     if (req.n_gen > 0) {
@@ -738,8 +773,9 @@ bool Gemma4Backend::snapshot_save(int slot) {
     if (needs_alloc) {
         free_gemma4_snapshot(snap);
 
+        const int n_feat_tensors = (cache_.target_feat && cache_.target_feat_cap > 0) ? 1 : 0;
         ggml_init_params ip{};
-        ip.mem_size = ggml_tensor_overhead() * (size_t)(n_layer * 2 + 4) + 4096;
+        ip.mem_size = ggml_tensor_overhead() * (size_t)(n_layer * 2 + n_feat_tensors + 4) + 4096;
         ip.no_alloc = true;
         snap.ctx = ggml_init(ip);
         if (!snap.ctx) return false;
@@ -759,10 +795,21 @@ bool Gemma4Backend::snapshot_save(int slot) {
             }
         }
 
+        // target_feat: save min(snap_pos, target_feat_cap) positions
+        snap.feat_snap = nullptr;
+        snap.feat_cap  = 0;
+        if (cache_.target_feat && cache_.target_feat_cap > 0) {
+            const int feat_len = std::min(snap_pos, cache_.target_feat_cap);
+            snap.feat_snap = ggml_new_tensor_2d(snap.ctx, cache_.target_feat->type,
+                                                 cache_.target_feat->ne[0], feat_len);
+            snap.feat_cap = cache_.target_feat_cap;
+        }
+
         snap.buf = ggml_backend_alloc_ctx_tensors(snap.ctx, snap_backend_);
         if (!snap.buf) {
             ggml_free(snap.ctx); snap.ctx = nullptr;
             snap.k_snap.clear(); snap.v_snap.clear();
+            snap.feat_snap = nullptr;
             return false;
         }
     }
@@ -792,9 +839,15 @@ bool Gemma4Backend::snapshot_save(int slot) {
         }
     }
     snap.cur_pos = snap_pos;
+    snap.last_tok = cache_.last_tok;
 
-    std::printf("[gemma4] snapshot saved slot=%d pos=%d\n", slot, snap.cur_pos);
-    std::fflush(stdout);
+    // target_feat: copy min(snap_pos, cap) positions from GPU to snapshot
+    if (snap.feat_snap && cache_.target_feat) {
+        const size_t feat_nbytes = ggml_nbytes(snap.feat_snap);
+        ggml_backend_tensor_get(cache_.target_feat, snap.feat_snap->data, 0, feat_nbytes);
+    }
+
+    std::fprintf(stderr, "[gemma4] snapshot saved slot=%d pos=%d\n", slot, snap.cur_pos);
     return true;
 }
 

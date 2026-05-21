@@ -478,7 +478,10 @@ void free_gemma4_snapshot(Gemma4Snapshot & s) {
     if (s.buf) { ggml_backend_buffer_free(s.buf); s.buf = nullptr; }
     if (s.ctx) { ggml_free(s.ctx); s.ctx = nullptr; }
     s.k_snap.clear(); s.v_snap.clear();
-    s.cur_pos = 0;
+    s.feat_snap = nullptr;
+    s.feat_cap  = 0;
+    s.cur_pos   = 0;
+    s.last_tok  = -1;
 }
 
 }  // namespace dflash::common
