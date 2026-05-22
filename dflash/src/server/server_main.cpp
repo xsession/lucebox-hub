@@ -9,12 +9,13 @@
 // Usage:
 //   dflash_server <model.gguf> [--draft <draft.gguf>] [--port 8080]
 //                              [--host 0.0.0.0] [--max-ctx 131072]
-//                              [--max-tokens 4096] [--gpu 0]
+//                              [--max-tokens 4096] [--target-device auto:0]
 
 #include "http_server.h"
 #include "chat_template.h"
 #include "common/backend_factory.h"
 #include "common/gguf_inspect.h"
+#include "common/peer_access.h"
 
 #include <csignal>
 #include <cstdio>
@@ -23,6 +24,7 @@
 #include <csignal>
 #include <memory>
 #include <string>
+#include <vector>
 
 using namespace dflash::common;
 
@@ -36,6 +38,67 @@ static void signal_handler(int sig) {
     }
 }
 
+static bool parse_double_list(const char * value, std::vector<double> & out) {
+    out.clear();
+    if (!value || !*value) return false;
+    const char * p = value;
+    while (*p) {
+        char * end = nullptr;
+        double v = std::strtod(p, &end);
+        if (end == p) return false;
+        out.push_back(v);
+        if (*end == '\0') return true;
+        if (*end != ',') return false;
+        p = end + 1;
+        if (!*p) return false;
+    }
+    return !out.empty();
+}
+
+static bool validate_server_placement(const BackendArgs & bargs) {
+    const PlacementBackend compiled = compiled_placement_backend();
+    if (!placement_backend_supported(bargs.device.backend)) {
+        std::fprintf(stderr,
+            "[server] --target-device=%s is unsupported in this binary "
+            "(compiled backend: %s)\n",
+            placement_device_name(bargs.device).c_str(),
+            placement_backend_name(compiled));
+        return false;
+    }
+    if (!placement_backend_supported(bargs.draft_device.backend)) {
+        std::fprintf(stderr,
+            "[server] --draft-device=%s is unsupported in this binary "
+            "(compiled backend: %s)\n",
+            placement_device_name(bargs.draft_device).c_str(),
+            placement_backend_name(compiled));
+        return false;
+    }
+    const PlacementBackend target = bargs.device.backend == PlacementBackend::Auto
+        ? compiled : bargs.device.backend;
+    const PlacementBackend draft = bargs.draft_device.backend == PlacementBackend::Auto
+        ? target : bargs.draft_device.backend;
+    if (target != draft) {
+        std::fprintf(stderr,
+            "[server] mixed target/draft backends are not implemented in the "
+            "native server yet (target=%s draft=%s)\n",
+            placement_backend_name(target), placement_backend_name(draft));
+        return false;
+    }
+    if (!bargs.device.layer_split_gpus.empty()) {
+        std::fprintf(stderr,
+            "[server] target layer split is not implemented in the native "
+            "server yet (--target-devices was provided)\n");
+        return false;
+    }
+    if (!bargs.device.layer_split_weights.empty()) {
+        std::fprintf(stderr,
+            "[server] --target-layer-split requires native target layer split "
+            "support, which is not implemented yet\n");
+        return false;
+    }
+    return true;
+}
+
 static void print_usage(const char * prog) {
     std::fprintf(stderr,
         "Usage: %s <model.gguf> [options]\n"
@@ -46,8 +109,11 @@ static void print_usage(const char * prog) {
         "  --host <addr>        Bind address (default: 0.0.0.0)\n"
         "  --max-ctx <N>        Max context length (default: 131072)\n"
         "  --max-tokens <N>     Default max output tokens (default: 4096)\n"
-        "  --gpu <N>            Target GPU device (default: 0)\n"
-        "  --draft-gpu <N>      Draft GPU device (default: 0)\n"
+        "  --target-device <backend:gpu>  Target device (default: auto:0)\n"
+        "  --draft-device <backend:gpu>   Draft device (default: auto:0)\n"
+        "  --target-devices <list>        Reserved layer-split devices, e.g. cuda:0,cuda:1\n"
+        "  --target-layer-split <weights>  Reserved layer-split weights\n"
+        "  --peer-access        Enable peer access for multi-GPU placement\n"
         "  --chunk <N>          Chunked-prefill chunk size (default: 512)\n"
         "  --fa-window <N>     Flash-attention sliding window (default: 0=full)\n"
         "  --model-name <name>  Model name for /v1/models (default: dflash)\n"
@@ -70,6 +136,7 @@ static void print_usage(const char * prog) {
         "  --prefill-keep-ratio <F>    Fraction of tokens to keep (default: 0.05)\n"
         "  --prefill-drafter <path>    Drafter GGUF for compression (Qwen3-0.6B)\n"
         "  --prefill-skip-park         Skip park/unpark (for >=32GB GPUs)\n"
+        "  --lazy-draft                Park decode draft when idle to save VRAM\n"
         "\n"
         "Disk KV cache:\n"
         "  --kv-cache-dir <path>       Directory for ondisk KV cache (enables feature)\n"
@@ -92,6 +159,8 @@ int main(int argc, char ** argv) {
     bargs.model_path = argv[1];
     std::string cache_type_k;  // explicit --cache-type-k override
     std::string cache_type_v;  // explicit --cache-type-v override
+    bool target_device_seen = false;
+    bool target_devices_seen = false;
 
     for (int i = 2; i < argc; i++) {
         if (std::strcmp(argv[i], "--draft") == 0 && i + 1 < argc) {
@@ -106,10 +175,38 @@ int main(int argc, char ** argv) {
             bargs.device.max_ctx = v;
         } else if (std::strcmp(argv[i], "--max-tokens") == 0 && i + 1 < argc) {
             sconfig.max_tokens = std::atoi(argv[++i]);
-        } else if (std::strcmp(argv[i], "--gpu") == 0 && i + 1 < argc) {
-            bargs.device.gpu = std::atoi(argv[++i]);
-        } else if (std::strcmp(argv[i], "--draft-gpu") == 0 && i + 1 < argc) {
-            bargs.draft_gpu = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--target-device") == 0 && i + 1 < argc) {
+            if (target_devices_seen) {
+                std::fprintf(stderr, "[server] --target-device conflicts with --target-devices\n");
+                return 2;
+            }
+            target_device_seen = true;
+            if (!parse_placement_device(argv[++i], bargs.device)) {
+                std::fprintf(stderr, "[server] bad --target-device value (expected backend:gpu)\n");
+                return 2;
+            }
+        } else if (std::strcmp(argv[i], "--draft-device") == 0 && i + 1 < argc) {
+            if (!parse_placement_device(argv[++i], bargs.draft_device)) {
+                std::fprintf(stderr, "[server] bad --draft-device value (expected backend:gpu)\n");
+                return 2;
+            }
+        } else if (std::strcmp(argv[i], "--target-devices") == 0 && i + 1 < argc) {
+            if (target_device_seen) {
+                std::fprintf(stderr, "[server] --target-devices conflicts with --target-device\n");
+                return 2;
+            }
+            target_devices_seen = true;
+            if (!parse_placement_device_list(argv[++i], bargs.device)) {
+                std::fprintf(stderr, "[server] bad --target-devices value (expected backend:gpu[,backend:gpu...])\n");
+                return 2;
+            }
+        } else if (std::strcmp(argv[i], "--target-layer-split") == 0 && i + 1 < argc) {
+            if (!parse_double_list(argv[++i], bargs.device.layer_split_weights)) {
+                std::fprintf(stderr, "[server] bad --target-layer-split value\n");
+                return 2;
+            }
+        } else if (std::strcmp(argv[i], "--peer-access") == 0) {
+            bargs.device.peer_access = true;
         } else if (std::strcmp(argv[i], "--chunk") == 0 && i + 1 < argc) {
             bargs.chunk = std::atoi(argv[++i]);
         } else if (std::strcmp(argv[i], "--fa-window") == 0 && i + 1 < argc) {
@@ -142,6 +239,8 @@ int main(int argc, char ** argv) {
             sconfig.pflash_drafter_path = argv[++i];
         } else if (std::strcmp(argv[i], "--prefill-skip-park") == 0) {
             sconfig.pflash_skip_park = true;
+        } else if (std::strcmp(argv[i], "--lazy-draft") == 0) {
+            sconfig.lazy_draft = true;
         } else if (std::strcmp(argv[i], "--kv-cache-dir") == 0 && i + 1 < argc) {
             sconfig.disk_cache_dir = argv[++i];
         } else if (std::strcmp(argv[i], "--kv-cache-budget") == 0 && i + 1 < argc) {
@@ -162,6 +261,8 @@ int main(int argc, char ** argv) {
             return 2;
         }
     }
+
+    if (!validate_server_placement(bargs)) return 2;
 
     // Sync max_ctx: if --max-ctx was not provided, use the backend's default.
     // This prevents the HTTP server from accepting prompts larger than the
@@ -196,6 +297,12 @@ int main(int argc, char ** argv) {
         setenv("DFLASH27B_FA_WINDOW", "0", 0);
     }
 
+    // Lazy-draft requires both prefill-drafter AND decode draft to be useful.
+    if (sconfig.lazy_draft && !(pflash_enabled && bargs.draft_path)) {
+        std::fprintf(stderr, "[server] --lazy-draft ignored: requires both --prefill-drafter and --draft\n");
+        sconfig.lazy_draft = false;
+    }
+
     // Load tokenizer.
     std::fprintf(stderr, "[server] loading tokenizer from %s\n", bargs.model_path);
     Tokenizer tokenizer;
@@ -224,6 +331,7 @@ int main(int argc, char ** argv) {
     }
 
     // Create backend.
+    g_peer_access_opt_in = bargs.device.peer_access;
     std::fprintf(stderr, "[server] creating backend...\n");
     const std::string arch = detect_arch(bargs.model_path);
     auto backend = create_backend(bargs);
@@ -242,8 +350,20 @@ int main(int argc, char ** argv) {
     std::fprintf(stderr, "[server] │  model_name      = %s\n", sconfig.model_name.c_str());
     std::fprintf(stderr, "[server] │  max_ctx         = %d\n", sconfig.max_ctx);
     std::fprintf(stderr, "[server] │  max_tokens      = %d\n", sconfig.max_tokens);
-    std::fprintf(stderr, "[server] │  gpu             = %d\n", bargs.device.gpu);
-    std::fprintf(stderr, "[server] │  draft_gpu       = %d\n", bargs.draft_gpu);
+    std::fprintf(stderr, "[server] │  target_device   = %s\n",
+                 placement_device_name(bargs.device).c_str());
+    if (bargs.device.is_layer_split()) {
+        std::fprintf(stderr, "[server] │  target_shards   =");
+        for (int gpu : bargs.device.layer_split_gpus) {
+            std::fprintf(stderr, " %s:%d",
+                         placement_backend_name(bargs.device.backend), gpu);
+        }
+        std::fprintf(stderr, "\n");
+    }
+    std::fprintf(stderr, "[server] │  draft_device    = %s\n",
+                 placement_device_name(bargs.draft_device).c_str());
+    std::fprintf(stderr, "[server] │  peer_access     = %s\n",
+                 bargs.device.peer_access ? "ON" : "off");
     std::fprintf(stderr, "[server] │  chunk           = %d\n", bargs.chunk);
     std::fprintf(stderr, "[server] │  fa_window       = %d\n", bargs.fa_window);
     std::fprintf(stderr, "[server] │  ddtree          = %s\n", bargs.ddtree_mode ? "ON" : "off");
@@ -272,6 +392,9 @@ int main(int argc, char ** argv) {
     std::fprintf(stderr, "[server] │  fp_use_bsa      = %s\n", getenv("DFLASH_FP_USE_BSA") ? "ON" : "off");
     std::fprintf(stderr, "[server] │  fp_alpha        = %s\n", getenv("DFLASH_FP_ALPHA") ? getenv("DFLASH_FP_ALPHA") : "0.12 (default)");
     }
+    if (bargs.draft_path) {
+    std::fprintf(stderr, "[server] │  lazy_draft      = %s\n", sconfig.lazy_draft ? "ON" : "off");
+    }
     std::fprintf(stderr, "[server] ╰─────────────────────────────────────────────────────╯\n\n");
 
     HttpServer server(*backend, tokenizer, sconfig);
@@ -282,6 +405,12 @@ int main(int argc, char ** argv) {
     if (pflash_enabled) {
         server.set_drafter_tokenizer(&drafter_tokenizer);
     }
+
+    // Lazy-draft: park decode draft at startup to free VRAM (~3.3 GB).
+    if (sconfig.lazy_draft && bargs.draft_path) {
+        backend->park("draft");
+    }
+
     int ret = server.run();
 
     // Cleanup.

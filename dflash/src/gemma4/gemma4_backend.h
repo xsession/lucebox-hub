@@ -6,7 +6,7 @@
 #pragma once
 
 #include "common/model_backend.h"
-#include "common/device_placement.h"
+#include "placement/placement_config.h"
 #include "common/dflash_feature_ring.h"
 #include "common/dflash_draft_graph.h"
 #include "gemma4_internal.h"

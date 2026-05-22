@@ -426,10 +426,50 @@ std::vector<std::string> SseEmitter::emit_finish(int completion_tokens) {
                 out.push_back(format_openai_delta({{"tool_calls", tc_list}}));
                 break;
             }
-            case ApiFormat::ANTHROPIC:
-                // Anthropic doesn't have streaming tool calls in the same way
-                // Tool use blocks would be separate content blocks
+            case ApiFormat::ANTHROPIC: {
+                // Anthropic tool_use is emitted as separate content blocks.
+                // Lifecycle per tool: close the open text/thinking block via
+                // content_block_stop, then for each tool_call emit
+                // content_block_start { type: tool_use, id, name, input: {} },
+                // a content_block_delta { type: input_json_delta, partial_json }
+                // carrying the JSON arguments, finally content_block_stop.
+                //
+                // The initial text/thinking block at index_=0 was opened by
+                // emit_start(); we close it now and bump block_index_ for
+                // each tool_use block we emit.
+                if (!active_kind_.empty()) {
+                    out.push_back(sse_event("content_block_stop",
+                        json({{"type", "content_block_stop"}, {"index", block_index_}}).dump()));
+                    active_kind_.clear();
+                }
+                for (const auto & tc : tool_calls_) {
+                    block_index_++;
+                    json tu_block = {
+                        {"type",  "tool_use"},
+                        {"id",    tc.id},
+                        {"name",  tc.name},
+                        {"input", json::object()}
+                    };
+                    out.push_back(sse_event("content_block_start",
+                        json({{"type", "content_block_start"},
+                              {"index", block_index_},
+                              {"content_block", tu_block}}).dump()));
+                    // Single-shot delta with the full arguments JSON. Clients
+                    // parse this incrementally; emitting it whole is spec-legal
+                    // and avoids partial-JSON splitting heuristics.
+                    if (!tc.arguments.empty()) {
+                        out.push_back(sse_event("content_block_delta",
+                            json({{"type",  "content_block_delta"},
+                                  {"index", block_index_},
+                                  {"delta", {{"type",         "input_json_delta"},
+                                             {"partial_json", tc.arguments}}}}).dump()));
+                    }
+                    out.push_back(sse_event("content_block_stop",
+                        json({{"type", "content_block_stop"},
+                              {"index", block_index_}}).dump()));
+                }
                 break;
+            }
             case ApiFormat::RESPONSES:
                 for (const auto & tc : tool_calls_) {
                     out.push_back(format_responses_event(
@@ -475,13 +515,24 @@ std::vector<std::string> SseEmitter::emit_finish(int completion_tokens) {
     }
 
     case ApiFormat::ANTHROPIC: {
-        // content_block_stop
-        out.push_back(sse_event("content_block_stop",
-            json({{"type", "content_block_stop"}, {"index", block_index_}}).dump()));
-        // message_delta
+        // content_block_stop only fires if a block is still open. With the
+        // tool_use emission added above, the last text/thinking/tool_use
+        // block may already be closed — in that case active_kind_ is empty
+        // and we skip the redundant close (idempotent, but some Anthropic
+        // SDK clients raise parse errors on duplicate stops at the same
+        // index).
+        if (!active_kind_.empty()) {
+            out.push_back(sse_event("content_block_stop",
+                json({{"type", "content_block_stop"}, {"index", block_index_}}).dump()));
+            active_kind_.clear();
+        }
+        // stop_reason reflects the model's actual finish: "tool_use" when
+        // any tool calls were emitted (downstream SDKs pivot on this to feed
+        // tool_result back), else "end_turn".
+        const char * stop_reason = tool_calls_.empty() ? "end_turn" : "tool_use";
         json msg_delta = {
             {"type", "message_delta"},
-            {"delta", {{"stop_reason", "end_turn"}, {"stop_sequence", nullptr}}},
+            {"delta", {{"stop_reason", stop_reason}, {"stop_sequence", nullptr}}},
             {"usage", {{"output_tokens", completion_tokens}}}
         };
         out.push_back(sse_event("message_delta", msg_delta.dump()));

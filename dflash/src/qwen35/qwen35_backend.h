@@ -13,7 +13,7 @@
 
 #include "common/model_backend.h"
 #include "common/dflash_target.h"
-#include "common/device_placement.h"
+#include "placement/placement_config.h"
 #include "step_graph.h"
 #include "ddtree.h"
 #include "dflash_feature_ring.h"
@@ -108,6 +108,10 @@ public:
     DFlashTarget * dflash_target() override;
 
     void shutdown() override;
+
+    // Release oversized scratch buffers (gallocr, BSA cache) between requests
+    // to prevent VRAM growth over time.
+    void release_scratch() override;
 
 private:
     // ── Configuration ────────────────────────────────────────────────

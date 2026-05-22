@@ -735,12 +735,27 @@ void HttpServer::worker_loop() {
         };
 
         // Run generation (with or without restore).
+        // Lazy-draft: ensure decode draft is loaded before generate.
+        if (config_.lazy_draft) {
+            backend_.free_drafter();    // free pflash drafter (~1.4 GB) if loaded
+            backend_.unpark("draft");   // reload decode draft (~3.3 GB)
+        }
+
         GenerateResult result;
         if (using_restore) {
             result = backend_.restore_and_generate(cache_slot, gen_req, io);
         } else {
             result = backend_.generate(gen_req, io);
         }
+
+        // Lazy-draft: park decode draft after generate to free VRAM.
+        if (config_.lazy_draft) {
+            backend_.park("draft");
+        }
+
+        // Release oversized scratch buffers (gallocr, BSA cache) so VRAM
+        // doesn't grow monotonically across requests with different sizes.
+        backend_.release_scratch();
 
         // Confirm or abort the inline snapshot.
         if (snap_prepared) {
@@ -858,7 +873,37 @@ void HttpServer::worker_loop() {
                 if (!emitter.reasoning_text().empty()) {
                     content.push_back({{"type", "thinking"}, {"thinking", emitter.reasoning_text()}});
                 }
-                content.push_back({{"type", "text"}, {"text", emitter.accumulated_text()}});
+                // Only emit a text block when there is actual text. When the
+                // model emitted ONLY a tool_call (Qwen3 XML), accumulated_text
+                // is empty — pushing an empty text block confuses Anthropic
+                // SDK clients (they expect tool_use blocks alone).
+                if (!emitter.accumulated_text().empty()) {
+                    content.push_back({{"type", "text"}, {"text", emitter.accumulated_text()}});
+                }
+                // Tool calls — the OPENAI_CHAT branch above does this; the
+                // ANTHROPIC branch was missing the tool_use serialisation,
+                // so stop_reason="tool_use" was returned with empty content.
+                // tc.arguments is a JSON-encoded string; parse to object for
+                // Anthropic's `input` field (Anthropic expects object, not
+                // string). Fall back to empty object on parse failure.
+                if (!emitter.tool_calls().empty()) {
+                    for (const auto & tc : emitter.tool_calls()) {
+                        json input_obj;
+                        try {
+                            input_obj = tc.arguments.empty()
+                                ? json::object()
+                                : json::parse(tc.arguments);
+                        } catch (const std::exception &) {
+                            input_obj = json::object();
+                        }
+                        content.push_back({
+                            {"type",  "tool_use"},
+                            {"id",    tc.id},
+                            {"name",  tc.name},
+                            {"input", input_obj}
+                        });
+                    }
+                }
                 resp = {
                     {"id", req.response_id}, {"type", "message"},
                     {"role", "assistant"}, {"model", req.model},
