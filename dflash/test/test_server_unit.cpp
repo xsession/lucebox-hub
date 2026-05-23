@@ -31,6 +31,13 @@
 using json = nlohmann::json;
 using namespace dflash::common;
 
+namespace dflash::common {
+std::vector<ChatMessage> normalize_chat_messages(
+    const json & messages,
+    ApiFormat format,
+    ToolMemory & tool_memory);
+}
+
 // ─── Test framework (ds4 style) ────────────────────────────────────────
 
 static int test_failures = 0;
@@ -423,6 +430,35 @@ static void test_emitter_responses_structure() {
     TEST_ASSERT(finish_str.find("response.completed") != std::string::npos);
 }
 
+static void test_emitter_responses_bare_function_tool_call() {
+    json tools = json::array({{
+        {"type", "function"},
+        {"name", "exec_command"},
+        {"description", "Run a command"},
+        {"parameters", {
+            {"type", "object"},
+            {"properties", {{"cmd", {{"type", "string"}}}}},
+            {"required", json::array({"cmd"})}
+        }}
+    }});
+    SseEmitter em(ApiFormat::RESPONSES, "resp_test_001", "test-model", 10,
+                  tools, nullptr, false);
+    em.emit_start();
+    em.emit_token("\n\n<function=exec_command>\n<parameter=cmd>\ngit pull\n");
+    em.emit_token("</parameter>\n</function>\n");
+    auto finish = em.emit_finish(8);
+    std::string finish_str = concat(finish);
+
+    TEST_ASSERT(!em.tool_calls().empty());
+    if (!em.tool_calls().empty()) {
+        TEST_ASSERT(em.tool_calls()[0].name == "exec_command");
+        auto args = json::parse(em.tool_calls()[0].arguments);
+        TEST_ASSERT(args["cmd"] == "git pull");
+    }
+    TEST_ASSERT(finish_str.find("\"type\":\"function_call\"") != std::string::npos);
+    TEST_ASSERT(finish_str.find("response.function_call_arguments.done") != std::string::npos);
+}
+
 static void test_emitter_streaming_openai_has_done() {
     auto em = make_emitter(ApiFormat::OPENAI_CHAT, false);
     em.emit_start();
@@ -808,6 +844,60 @@ static void test_jinja_render_bad_tools_json_throws() {
     TEST_ASSERT(threw);
 }
 
+static void test_normalize_responses_tool_followup_messages() {
+    ToolMemory tool_memory;
+    const std::string call_id = "call_exec_001";
+    const std::string raw_tool_call =
+        "\n\n<function=exec_command>\n"
+        "<parameter=cmd>\n"
+        "git fetch origin && git status\n"
+        "</parameter>\n"
+        "</function>\n";
+    tool_memory.remember({call_id}, raw_tool_call);
+
+    json messages = json::array({
+        {
+            {"role", "developer"},
+            {"content", json::array({{
+                {"type", "input_text"},
+                {"text", "Developer rules"}
+            }})}
+        },
+        {
+            {"role", "user"},
+            {"content", json::array({{
+                {"type", "input_text"},
+                {"text", "fetch latest code"}
+            }})}
+        },
+        {
+            {"type", "function_call"},
+            {"call_id", call_id},
+            {"name", "exec_command"},
+            {"arguments", R"({"cmd":"git fetch origin && git status"})"}
+        },
+        {
+            {"type", "function_call_output"},
+            {"call_id", call_id},
+            {"output", "Process exited with code 0"}
+        }
+    });
+
+    auto chat_msgs = normalize_chat_messages(messages, ApiFormat::RESPONSES, tool_memory);
+    TEST_ASSERT(chat_msgs.size() == 4);
+    if (chat_msgs.size() == 4) {
+        TEST_ASSERT(chat_msgs[0].role == "system");
+        TEST_ASSERT(chat_msgs[0].content == "Developer rules");
+        TEST_ASSERT(chat_msgs[1].role == "user");
+        TEST_ASSERT(chat_msgs[1].content == "fetch latest code");
+        TEST_ASSERT(chat_msgs[2].role == "assistant");
+        TEST_ASSERT(chat_msgs[2].content == raw_tool_call);
+        TEST_ASSERT(chat_msgs[3].role == "tool");
+        TEST_ASSERT(chat_msgs[3].tool_call_id == call_id);
+        TEST_ASSERT(chat_msgs[3].content == "Process exited with code 0");
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Disk Prefix Cache Tests
 // ═══════════════════════════════════════════════════════════════════════
@@ -1185,6 +1275,7 @@ int main() {
     RUN_TEST(test_emitter_anthropic_tool_use_blocks);
     RUN_TEST(test_emitter_anthropic_structure);
     RUN_TEST(test_emitter_responses_structure);
+    RUN_TEST(test_emitter_responses_bare_function_tool_call);
     RUN_TEST(test_emitter_streaming_openai_has_done);
     RUN_TEST(test_emitter_nonstreaming_accumulates);
     RUN_TEST(test_emitter_anthropic_thinking_blocks);
@@ -1224,6 +1315,7 @@ int main() {
     RUN_TEST(test_jinja_render_bos_eos_threaded);
     RUN_TEST(test_jinja_render_empty_template_throws);
     RUN_TEST(test_jinja_render_bad_tools_json_throws);
+    RUN_TEST(test_normalize_responses_tool_followup_messages);
 
     std::fprintf(stderr, "\n── Disk prefix cache ──\n");
     RUN_TEST(test_disk_cache_config_defaults);
