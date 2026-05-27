@@ -4,6 +4,7 @@
 
 <p align="center">
   <a href="https://lucebox.com"><img src="https://img.shields.io/badge/lucebox.com-f5c842?style=for-the-badge&logo=safari&logoColor=f5c842&labelColor=090909" alt="lucebox.com"></a>
+  <a href="https://huggingface.co/Lucebox"><img src="https://img.shields.io/badge/HuggingFace-f5c842?style=for-the-badge&logo=huggingface&logoColor=f5c842&labelColor=090909" alt="HuggingFace"></a>
   <a href="https://discord.gg/yHfswqZmJQ"><img src="https://img.shields.io/badge/Discord-f5c842?style=for-the-badge&logo=discord&logoColor=f5c842&labelColor=090909" alt="Discord"></a>
   <a href="https://lucebox.com/blog"><img src="https://img.shields.io/badge/Blog-f5c842?style=for-the-badge&logo=rss&logoColor=f5c842&labelColor=090909" alt="Blog"></a>
 </p>
@@ -40,17 +41,17 @@ Each directory is self-contained with setup instructions and benchmark notes.
 
 ## Supported models
 
-All speedups measured vs vendored llama.cpp (`-fa 1`, matching KV quant). Combined = geometric mean √(TTFT × decode), shown only when both phases were benched. GPU-specific numbers in the table below.
+All speedups measured vs vendored llama.cpp (`-fa 1`, matching KV quant). Combined = geometric mean √(TTFT × decode) where both phases benched; otherwise the single-phase speedup. GPU-specific numbers in the table below.
 
-| Model | TTFT | Decode | Combined |
-|-------|:----:|:------:|:--------:|
-| Qwen 3.5-0.8B (Megakernel) | — | **~2×** vs F16 | — |
-| Qwen 3.5-27B Q4_K_M (DFlash + DDTree) | — | **3.43×** vs AR | — |
-| Qwen 3.6-27B Q4_K_M (DFlash + PFlash) | **10.4×** @ 128K | **~3×** vs AR | **~5.6×** |
-| Qwen 3.6-27B Q4_K_M (DFlash + DDTree) | — | **4.84×** vs AR | — |
-| Laguna-XS.2 33B-A3B Q4_K_M (DFlash + PFlash) | **5.4×** @ 128K | AR (draft pending) | — |
-| Qwen 3.5-27B Q4_K_M (DFlash + PFlash, HIP) | **2.24×** @ 16K | **3.08×** vs llama.cpp HIP AR | **~2.6×** |
-| Gemma-4-26B-A4B Q4_K_M (DFlash) | — | **1.31×** vs llama.cpp | — |
+| Model | Speedup |
+|-------|:-------:|
+| Qwen 3.5-0.8B (Megakernel) | **~2×** |
+| Qwen 3.5-27B Q4_K_M (DFlash + DDTree) | **3.43×** |
+| Qwen 3.6-27B Q4_K_M (DFlash + PFlash) | **~5.6×** |
+| Qwen 3.6-27B Q4_K_M (DFlash + DDTree) | **4.84×** |
+| Laguna-XS.2 33B-A3B Q4_K_M (DFlash + PFlash) | **5.4×** @ 128K |
+| Qwen 3.5-27B Q4_K_M (DFlash + PFlash, HIP) | **~2.6×** |
+| Gemma-4-26B-A4B Q4_K_M (DFlash) | **1.31×** |
 
 ## Client harnesses
 
