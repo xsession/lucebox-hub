@@ -359,6 +359,30 @@ DFLASH27B_KV_TQ3=1 DFLASH27B_PREFILL_UBATCH=16 \
 
 **Requirements:** NVIDIA sm_60+ GPU (Pascal P40 24GB, V100 32GB, 2080 Ti, 3090, A10, A40, 4090) or Jetson AGX Thor sm_110, CUDA 12+ (CUDA 13+ required for Thor), 22+ GB VRAM, ~80 GB disk. Pascal GPUs use the scalar flashprefill fallback (no WMMA); P100 (12/16 GB) cannot fit the 27B target + draft under the 22 GB minimum. On Volta (SM 7.0) and Turing (SM 7.5), BF16 draft weights are auto-converted to FP16 at load time for tensor core acceleration.
 
+## AMD HIP backend (Strix Halo, RX 7900 XTX)
+
+Same DFlash + PFlash stack on AMD GPUs. PR #119 ports the Phase 2 rocWMMA flashprefill kernels to HIP. End-to-end on a Ryzen AI MAX+ 395 box (Radeon 8060S iGPU, `gfx1151`, 128 GiB LPDDR5X-8000 unified): **37.0 tok/s DFlash decode** on Qwen3.5-27B Q4_K_M, **27.6 s TTFT @ 16K** with NIAH retrieval intact. **3.08× decode and 2.24× prefill over llama.cpp HIP AR** on the same iGPU. End-to-end wall clock at a 16K prompt + 1K generation workload: **2.66× faster** than vanilla llama.cpp.
+
+```bash
+git clone --recurse-submodules https://github.com/Luce-Org/lucebox-hub && cd lucebox-hub/server
+
+# Build for gfx1151 (Strix Halo). Swap arch for gfx1100 / gfx1201.
+cmake -B build -S . \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DDFLASH27B_GPU_BACKEND=hip \
+  -DDFLASH27B_HIP_ARCHITECTURES=gfx1151 \
+  -DDFLASH27B_HIP_SM80_EQUIV=ON
+cmake --build build --target test_dflash -j
+```
+
+`DFLASH27B_HIP_SM80_EQUIV=ON` enables the rocWMMA Phase 2 flashprefill kernels (path that delivers the prefill speedup). `OFF` falls back to ggml's `flash_attn_ext` (slower but no rocwmma headers needed).
+
+**Per-arch DDTree tuning:** `gfx1151` (Strix Halo iGPU, bandwidth-bound on LPDDR5X) peaks at `--ddtree-budget=22`. `gfx1100` (7900 XTX, GDDR6) prefers `budget=8` per the [PR #156 cross-arch perf plan](https://github.com/Luce-Org/lucebox-hub/pull/156). Run `scripts/bench_he.py --ddtree-budget N` to verify on your card.
+
+**Drafter recipe for max decode:** target = Qwen3.5-27B Q4_K_M, drafter = same gen quantized to Q8_0 via `server/scripts/quantize_draft_q8.py`. Matching Q8_0 GGUF on the unsloth Qwen3.6 target needs `DFLASH27B_DRAFT_SWA=2048` for sliding-window correctness.
+
+See also: [`docs/HIP_PERF_PLAN.md`](docs/HIP_PERF_PLAN.md) (perf sweeps), [`docs/MIXED_BACKEND.md`](docs/MIXED_BACKEND.md) (mixed CUDA+HIP runs).
+
 ## How it works
 
 **Block-diffusion draft.** Each step, the draft sees `[last_target_token, MASK×15]` plus the last 5 captured target hidden states. It denoises the masks in a single forward, producing 16 candidate tokens conditioned on real target features. Structurally stronger than chain EAGLE: every position conditions on the same captured context, not its own noisy predictions.

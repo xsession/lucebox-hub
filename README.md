@@ -84,8 +84,8 @@ Reference target: **RTX 3090 (Ampere sm_86)** — all headline numbers. Other NV
 | <img src="assets/gpus/4090.png" width="750" /> | Ada `sm_89` | RTX 40xx | CUDA 12.0 | 🟡 community WSL2 bench | [↗](server/RESULTS.md#rtx-4090-ada-sm_89-24-gb--wsl2-community) |
 | — | Blackwell `sm_110` | Jetson AGX Thor | CUDA 13.0 | 🟡 builds, unbenched | — |
 | <img src="assets/gpus/v100.png" width="750" /> | Volta `sm_70` / Pascal `sm_61` | V100, P40 | CUDA 12.0 | 🟡 fallback paths, unbenched | — |
-| <img src="assets/gpus/ryze395.png" width="750" /> | RDNA3.5 `gfx1151` | Ryzen AI MAX+ 395 / Strix Halo | ROCm 6+ | ✅ 37 tok/s HIP | [↗](#amd-strix-halo-hip-backend) |
-| <img src="assets/gpus/7900xtx.png" width="750" /> | RDNA3 `gfx1100` | Radeon RX 7900 XTX | ROCm 6+ | ✅ 50 tok/s HIP | [↗](server/docs/HIP_PERF_PLAN.md) |
+| <img src="assets/gpus/ryze395.png" width="750" /> | RDNA3.5 `gfx1151` | Ryzen AI MAX+ 395 / Strix Halo | ROCm 6+ | ✅ 37 tok/s HIP | [↗](server/README.md#amd-hip-backend-strix-halo-rx-7900-xtx) |
+| <img src="assets/gpus/7900xtx.png" width="750" /> | RDNA3 `gfx1100` | Radeon RX 7900 XTX | ROCm 6+ | ✅ 50 tok/s HIP | [↗](server/README.md#amd-hip-backend-strix-halo-rx-7900-xtx) |
 
 `server/` (DFlash) builds with CMake 3.18+ and `--recurse-submodules` for `Luce-Org/llama.cpp@luce-dflash` — no PyTorch needed. `optimizations/megakernel/` is the only component requiring PyTorch 2.0+ (CUDAExtension links against torch C++ libs). Power-tune: `sudo nvidia-smi -pl 220` (3090 sweet spot, re-sweep for other cards).
 
