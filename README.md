@@ -22,7 +22,7 @@
 
 ---
 
-## Optimizations
+## Inference Engine Optimizations
 
 Each directory is self-contained with setup instructions and benchmark notes.
 
@@ -315,26 +315,15 @@ PyTorch 2.0+. `server/` needs CMake 3.18+ and `--recurse-submodules` for the pin
 
 ---
 
-## Repository layout
+## Request for Contributions
 
 ```
-lucebox-hub/
-├── optimizations/megakernel/    · fused forward pass for Qwen 3.5-0.8B
-├── server/        · DFlash speculative decoding port for Qwen 3.5/3.6-27B on RTX 3090
-├── optimizations/pflash/        · speculative-prefill harness in front of dflash (12.5× TTFT at 128K)
-└── assets/        · banners, cards, diagrams
-```
-
----
-
-## Roadmap
-
-```
-  Q1 2026    ▮▮▮▮▮▮▮▮▮▮    RTX 3090 kernels & optimizations
-  Q2 2026    ▮▮▮▮▮▯▯▯▯▯    Ryzen AI MAX+ 395 optimizations
-  Q2 2026    ▮▮▯▯▯▯▯▯▯▯    Heterogeneous CPU + GPU latency optimizations
-  Q2 2026    ▮▯▯▯▯▯▯▯▯▯    Lucebox OS for local AI machines
-  Q3 2026    ▯▯▯▯▯▯▯▯▯▯    Lucebox official launch
+  ▮▮▮▮▮▮▮▮▮▮    HIP/CUDA kernel optimizations
+  ▮▮▮▮▮▮▮▮▮▯    Speculative inference optimizations
+  ▮▮▮▮▮▮▮▯▯▯    Support to new GPU/APU consumer cards
+  ▮▮▮▮▮▮▮▯▯▯    Inference engine debugging
+  ▮▮▮▮▮▮▯▯▯▯    Add new performance benchmarks
+  ▮▮▮▮▮▯▯▯▯▯    Improvements for harnesses integration
 ```
 
 ---
@@ -343,23 +332,12 @@ lucebox-hub/
 
 ```bibtex
 @software{lucebox_2026,
-  title  = {Lucebox: Open LLM Inference, Rewritten by Hand for One Specific Chip at a Time},
+  title  = {Fast LLM speculative inference server for specific consumer hardware.},
   author = {Lucebox},
   url    = {https://github.com/Luce-Org/lucebox-hub},
   year   = {2026}
 }
 ```
-
-Per-project citations live in each subproject's README.
-
----
-
-## Inspired by
-
-- [Hazy Research](https://hazyresearch.stanford.edu/blog/2025-05-27-no-bubbles): megakernel idea and the intelligence-per-watt methodology.
-- [z-lab/DFlash](https://arxiv.org/abs/2602.06036) (Wang et al., 2026): block-diffusion speculative decoding algorithm. We use their published Qwen3.5/Qwen3.6-27B-DFlash draft weights as-is.
-- [DDTree](https://arxiv.org/abs/2604.12989) (Ringel & Romano, 2026): tree-structured verify that DFlash 27B uses for its 3.5× speedup over chain spec decoding. [liranringel/ddtree](https://github.com/liranringel/ddtree).
-- [AlpinDale/qwen_megakernel](https://github.com/AlpinDale/qwen_megakernel), [Infatoshi/MegaQwen](https://github.com/Infatoshi/MegaQwen): prior art on fused Qwen kernels.
 
 ---
 
