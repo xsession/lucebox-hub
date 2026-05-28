@@ -16,6 +16,7 @@
 #include "model_card.h"
 #include "common/backend_factory.h"
 #include "common/gguf_inspect.h"
+#include "common/layer_split_utils.h"
 #include "common/peer_access.h"
 #include "placement/pflash_placement.h"
 
@@ -114,16 +115,31 @@ static bool validate_server_placement(const BackendArgs & bargs,
             placement_backend_name(compiled));
         return false;
     }
-    if (!bargs.device.layer_split_gpus.empty()) {
+    if (!bargs.device.is_layer_split() && !bargs.device.layer_split_weights.empty()) {
         std::fprintf(stderr,
-            "[server] target layer split is not implemented in the native "
-            "server yet (--target-devices was provided)\n");
+            "[server] --target-layer-split requires --target-devices\n");
         return false;
     }
-    if (!bargs.device.layer_split_weights.empty()) {
+    if (bargs.device.is_layer_split()) {
+        const std::string placement_error =
+            validate_device_placement(bargs.device, /*device_count=*/-1);
+        if (!placement_error.empty()) {
+            std::fprintf(stderr, "[server] bad target layer split: %s\n",
+                         placement_error.c_str());
+            return false;
+        }
+        if (!sconfig.disk_cache_dir.empty()) {
+            std::fprintf(stderr,
+                "[server] --kv-cache-dir is not supported with --target-devices yet; "
+                "sharded disk snapshot/restore will be added separately\n");
+            return false;
+        }
+    }
+    if (bargs.device.is_layer_split() && target != compiled) {
         std::fprintf(stderr,
-            "[server] --target-layer-split requires native target layer split "
-            "support, which is not implemented yet\n");
+            "[server] target layer split must use this binary's compiled "
+            "backend (target=%s compiled=%s)\n",
+            placement_backend_name(target), placement_backend_name(compiled));
         return false;
     }
     return true;
