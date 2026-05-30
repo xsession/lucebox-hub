@@ -32,6 +32,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include <limits>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -1246,7 +1247,6 @@ struct MockLayerSplitAdapter : LayerSplitAdapter {
     std::vector<int32_t> emitted_tokens;
     bool dflash_enabled = false;
     bool dflash_called = false;
-    bool sampling_enabled = false;
     int shutdown_calls = 0;
     ModelBackend::CompressRequest last_compress_req;
 
@@ -1281,7 +1281,6 @@ struct MockLayerSplitAdapter : LayerSplitAdapter {
         return true;
     }
     bool can_dflash_decode() const override { return dflash_enabled; }
-    bool supports_cpu_sampling() const override { return sampling_enabled; }
     bool decode_dflash(const std::vector<int32_t> & prompt, int base_pos,
                        int last_tok, int n_gen, std::vector<int32_t> & out_tokens,
                        const DaemonIO & io) override {
@@ -1374,42 +1373,6 @@ static void test_layer_split_backend_inline_snapshot_and_restore_delta() {
     TEST_ASSERT(raw->prefill_sizes[0] == 1);
     TEST_ASSERT(raw->dflash_base == 3);
     TEST_ASSERT(raw->dflash_last == 99);
-}
-
-static void test_layer_split_backend_sampling_capability_gate() {
-    {
-        auto * raw = new MockLayerSplitAdapter();
-        LayerSplitBackend backend{std::unique_ptr<LayerSplitAdapter>(raw)};
-
-        GenerateRequest req;
-        req.prompt = {10, 11};
-        req.n_gen = 1;
-        req.do_sample = true;
-        req.sampler.temp = 0.8f;
-        DaemonIO io;
-        GenerateResult result = backend.generate(req, io);
-
-        TEST_ASSERT(!result.ok);
-        TEST_ASSERT(result.error == "sampling_unsupported");
-    }
-
-    {
-        auto * raw = new MockLayerSplitAdapter();
-        raw->sampling_enabled = true;
-        LayerSplitBackend backend{std::unique_ptr<LayerSplitAdapter>(raw)};
-
-        GenerateRequest req;
-        req.prompt = {10, 11};
-        req.n_gen = 1;
-        req.do_sample = true;
-        req.sampler.temp = 0.8f;
-        DaemonIO io;
-        GenerateResult result = backend.generate(req, io);
-
-        TEST_ASSERT(result.ok);
-        TEST_ASSERT(result.tokens.size() == 1);
-        TEST_ASSERT(result.tokens[0] == 12);
-    }
 }
 
 static void test_layer_split_compress_nopark_uses_default_drafter_path() {
@@ -1852,6 +1815,33 @@ static void test_backend_ipc_payload_pipe_round_trip() {
     TEST_ASSERT(read_exact_fd(status_pipe[0], &status, sizeof(status)));
     TEST_ASSERT(status == 0);
     close(status_pipe[0]);
+}
+
+static void test_backend_ipc_payload_transport_parse() {
+    BackendIpcPayloadTransport transport = BackendIpcPayloadTransport::Auto;
+    TEST_ASSERT(parse_backend_ipc_payload_transport("stream", transport));
+    TEST_ASSERT(transport == BackendIpcPayloadTransport::Stream);
+    TEST_ASSERT(parse_backend_ipc_payload_transport("shared", transport));
+    TEST_ASSERT(transport == BackendIpcPayloadTransport::Shared);
+    TEST_ASSERT(parse_backend_ipc_payload_transport("auto", transport));
+    TEST_ASSERT(transport == BackendIpcPayloadTransport::Auto);
+    TEST_ASSERT(!parse_backend_ipc_payload_transport("pipe", transport));
+    TEST_ASSERT(std::strcmp(
+        backend_ipc_payload_transport_name(BackendIpcPayloadTransport::Stream),
+        "stream") == 0);
+}
+
+static void test_backend_ipc_payload_bounds() {
+    size_t out = 0;
+    TEST_ASSERT(backend_ipc_checked_add_size(4, 8, out));
+    TEST_ASSERT(out == 12);
+    TEST_ASSERT(!backend_ipc_checked_add_size(
+        std::numeric_limits<size_t>::max(), 1, out));
+    TEST_ASSERT(backend_ipc_payload_in_bounds(0, 16, 16));
+    TEST_ASSERT(backend_ipc_payload_in_bounds(4, 8, 16));
+    TEST_ASSERT(!backend_ipc_payload_in_bounds(9, 8, 16));
+    TEST_ASSERT(!backend_ipc_payload_in_bounds(
+        std::numeric_limits<size_t>::max(), 1, 16));
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -2682,6 +2672,12 @@ int main() {
     RUN_TEST(test_pflash_placement_disabled_never_remote);
     RUN_TEST(test_pflash_placement_usage_gate);
 
+    std::fprintf(stderr, "\n── Backend IPC ──\n");
+    RUN_TEST(test_backend_ipc_rejects_file_work_dir);
+    RUN_TEST(test_backend_ipc_payload_pipe_round_trip);
+    RUN_TEST(test_backend_ipc_payload_transport_parse);
+    RUN_TEST(test_backend_ipc_payload_bounds);
+
     std::fprintf(stderr, "\n── Jinja chat template ──\n");
     RUN_TEST(test_jinja_render_basic);
     RUN_TEST(test_jinja_render_no_gen_prompt);
@@ -2698,7 +2694,6 @@ int main() {
     RUN_TEST(test_parse_target_device_list_single_gpu_is_not_layer_split);
     RUN_TEST(test_validate_layer_split_weights_shape);
     RUN_TEST(test_layer_split_backend_inline_snapshot_and_restore_delta);
-    RUN_TEST(test_layer_split_backend_sampling_capability_gate);
     RUN_TEST(test_layer_split_compress_nopark_uses_default_drafter_path);
     RUN_TEST(test_layer_split_compress_rejects_bad_keep_ratio);
     RUN_TEST(test_layer_split_backend_shutdown_is_idempotent);
@@ -2719,6 +2714,8 @@ int main() {
     RUN_TEST(test_disk_cache_save_below_min_tokens);
     RUN_TEST(test_backend_ipc_rejects_file_work_dir);
     RUN_TEST(test_backend_ipc_payload_pipe_round_trip);
+    RUN_TEST(test_backend_ipc_payload_transport_parse);
+    RUN_TEST(test_backend_ipc_payload_bounds);
 
     std::fprintf(stderr, "\n── Sampler ──\n");
     RUN_TEST(test_sampler_cfg_defaults);
