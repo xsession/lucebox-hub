@@ -237,6 +237,7 @@ add_library(dflash_common STATIC
     src/laguna/laguna_target_graph.cpp
     src/laguna/laguna_daemon.cpp
     src/laguna/laguna_backend.cpp
+    src/laguna/laguna_layer_split_adapter.cpp
     src/common/backend_ipc.cpp
     src/common/dflash_feature_ring.cpp
     src/common/dflash_capture.cpp
@@ -713,25 +714,30 @@ if(DFLASH27B_TESTS)
 
     # ─── dflash_server: native C++ HTTP server ─────────────────────────
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/server/server_main.cpp")
-        add_executable(dflash_server
-            src/server/server_main.cpp
-            src/server/http_server.cpp
-            src/server/model_card.cpp
-        )
-        target_include_directories(dflash_server PRIVATE ${DFLASH27B_SRC_INCLUDE_DIRS})
-        if(DFLASH27B_GPU_BACKEND STREQUAL "hip")
-            target_compile_definitions(dflash_server PRIVATE DFLASH27B_BACKEND_HIP=1 GGML_USE_HIP)
+        find_package(CURL QUIET)
+        if(NOT CURL_FOUND)
+            message(WARNING "CURL not found — skipping dflash_server (passthrough proxy disabled)")
         else()
-            target_compile_definitions(dflash_server PRIVATE
-                DFLASH27B_BACKEND_CUDA=1
-                DFLASH27B_CUDA_MIN_SM=${_dflash_cuda_min_sm})
-        endif()
-        target_link_libraries(dflash_server PRIVATE dflash_common ggml ${DFLASH27B_GGML_BACKEND_TARGET} pthread)
-        if(DFLASH27B_GPU_BACKEND STREQUAL "cuda")
-            find_package(CUDAToolkit REQUIRED)
-            target_link_libraries(dflash_server PRIVATE CUDA::cudart)
-        else()
-            target_link_libraries(dflash_server PRIVATE hip::host)
+            add_executable(dflash_server
+                src/server/server_main.cpp
+                src/server/http_server.cpp
+                src/server/model_card.cpp
+            )
+            target_include_directories(dflash_server PRIVATE ${DFLASH27B_SRC_INCLUDE_DIRS})
+            if(DFLASH27B_GPU_BACKEND STREQUAL "hip")
+                target_compile_definitions(dflash_server PRIVATE DFLASH27B_BACKEND_HIP=1 GGML_USE_HIP)
+            else()
+                target_compile_definitions(dflash_server PRIVATE
+                    DFLASH27B_BACKEND_CUDA=1
+                    DFLASH27B_CUDA_MIN_SM=${_dflash_cuda_min_sm})
+            endif()
+            target_link_libraries(dflash_server PRIVATE dflash_common ggml ${DFLASH27B_GGML_BACKEND_TARGET} pthread CURL::libcurl)
+            if(DFLASH27B_GPU_BACKEND STREQUAL "cuda")
+                find_package(CUDAToolkit REQUIRED)
+                target_link_libraries(dflash_server PRIVATE CUDA::cudart)
+            else()
+                target_link_libraries(dflash_server PRIVATE hip::host)
+            endif()
         endif()
     endif()
 
@@ -780,7 +786,7 @@ if(DFLASH27B_TESTS)
     # ─── Unit tests (no GPU, no model files) ────────────────────────────
     enable_testing()
 
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_server_unit.cpp")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_server_unit.cpp" AND CURL_FOUND)
         add_executable(test_server_unit test/test_server_unit.cpp)
         target_sources(test_server_unit PRIVATE
             src/server/http_server.cpp
@@ -793,7 +799,7 @@ if(DFLASH27B_TESTS)
                 DFLASH27B_BACKEND_CUDA=1
                 DFLASH27B_CUDA_MIN_SM=${_dflash_cuda_min_sm})
         endif()
-        target_link_libraries(test_server_unit PRIVATE dflash_common ggml ${DFLASH27B_GGML_BACKEND_TARGET})
+        target_link_libraries(test_server_unit PRIVATE dflash_common ggml ${DFLASH27B_GGML_BACKEND_TARGET} CURL::libcurl)
         if(DFLASH27B_GPU_BACKEND STREQUAL "cuda")
             find_package(CUDAToolkit REQUIRED)
             target_link_libraries(test_server_unit PRIVATE CUDA::cudart)
@@ -804,11 +810,18 @@ if(DFLASH27B_TESTS)
     endif()
 
     # 'make check' — builds test targets then runs ctest
-    add_custom_target(check
-        COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-        DEPENDS test_server_unit
-        COMMENT "Building and running unit tests"
-    )
+    if(TARGET test_server_unit)
+        add_custom_target(check
+            COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+            DEPENDS test_server_unit
+            COMMENT "Building and running unit tests"
+        )
+    else()
+        add_custom_target(check
+            COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+            COMMENT "Building and running unit tests (server unit tests skipped — CURL not found)"
+        )
+    endif()
 
     if(DFLASH27B_GPU_BACKEND STREQUAL "cuda")
     # internal.h includes <cuda_runtime.h> when GGML_USE_CUDA is set; link

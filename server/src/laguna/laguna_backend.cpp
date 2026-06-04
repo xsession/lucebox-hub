@@ -45,9 +45,9 @@ LagunaBackend::LagunaBackend(const LagunaBackendArgs & args)
 LagunaBackend::~LagunaBackend() { shutdown(); }
 
 bool LagunaBackend::init() {
-    backend_ = ggml_backend_cuda_init(0);
+    backend_ = ggml_backend_cuda_init(args_.device.gpu);
     if (!backend_) {
-        std::fprintf(stderr, "cuda init failed\n");
+        std::fprintf(stderr, "cuda init failed gpu=%d\n", args_.device.gpu);
         return false;
     }
 
@@ -529,7 +529,9 @@ bool LagunaBackend::init_hybrid_mode() {
     const char * hotness_path = std::getenv("DFLASH_LAGUNA_HOTNESS");
 
     // Step 1: Load model WITHOUT expert data to GPU (partial load)
-    if (!load_target_gguf_laguna_partial(args_.target_path, backend_, w_)) {
+    TargetLoadPlan _hybrid_plan;
+    _hybrid_plan.skip_expert_tensors = true;
+    if (!load_target_gguf_laguna_partial(args_.target_path, backend_, _hybrid_plan, w_)) {
         std::fprintf(stderr, "[laguna-hybrid] partial load failed: %s\n", dflash27b_last_error());
         return false;
     }
