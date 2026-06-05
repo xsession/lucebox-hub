@@ -20,31 +20,21 @@ import argparse
 import json
 import os
 import struct
-import subprocess
-import threading
 import time
 from pathlib import Path
 
 from tokenizers import Tokenizer
+
+try:
+    from ._daemon import Daemon
+except ImportError:  # allow direct `python calibrate.py`
+    from _daemon import Daemon
 
 
 def write_counted_i32(path, ids):
     with open(path, "wb") as f:
         f.write(struct.pack("<I", len(ids)))
         f.write(struct.pack("<%di" % len(ids), *(int(t) for t in ids)))
-
-
-def wait_ready(proc, timeout=600):
-    t0 = time.time()
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            raise SystemExit("daemon died before ready banner")
-        if "-daemon] ready" in line:
-            return
-        if time.time() - t0 > timeout:
-            proc.kill()
-            raise SystemExit("timeout waiting for ready banner")
 
 
 def main():
@@ -60,6 +50,8 @@ def main():
                     help="high = fast calibration; routing is placement-independent")
     ap.add_argument("--n-gen", type=int, default=8, help="decode tokens per chunk")
     ap.add_argument("--max-tok", type=int, default=2048, help="cap per-chunk prompt tokens")
+    ap.add_argument("--ready-timeout", type=int, default=600, help="seconds to wait for model load")
+    ap.add_argument("--gen-timeout", type=int, default=120, help="seconds per chunk before giving up")
     args = ap.parse_args()
 
     tk = Tokenizer.from_file(args.tok)
@@ -70,10 +62,9 @@ def main():
     env["DFLASH_IGNORE_EOS"] = "1"
     env["DFLASH_EXPERT_BUDGET_PCT"] = str(args.budget_pct)
     env["DFLASH_LAGUNA_NEXT_PLACEMENT_OUT"] = str(Path(args.out_profile))
-    proc = subprocess.Popen([args.bin, args.gguf, "--max-ctx", str(args.max_ctx)],
-                            env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, bufsize=1, universal_newlines=True)
-    wait_ready(proc)
+
+    daemon = Daemon([args.bin, args.gguf, "--max-ctx", str(args.max_ctx)], env)
+    daemon.wait_ready(timeout=args.ready_timeout)
 
     pp = Path(args.out_profile).with_suffix(".chunk.bin")
     op = Path(args.out_profile).with_suffix(".out.bin")
@@ -84,38 +75,18 @@ def main():
         if len(ids) < 8:
             continue
         write_counted_i32(pp, ids)
+        reply = daemon.request(f"generate {pp} {args.n_gen} {op}", timeout=args.gen_timeout)
+        if reply is None:
+            print(f"[calib] daemon stalled/closed at chunk {i}; stopping", flush=True)
+            break
         toks += len(ids)
-        try:
-            proc.stdin.write(f"generate {pp} {args.n_gen} {op}\n")
-            proc.stdin.flush()
-        except BrokenPipeError:
-            print(f"[calib] daemon closed at chunk {i}", flush=True)
-            break
-        ts = time.time()
-        ok = False
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            if line.startswith("ok ") or line.startswith("err "):
-                ok = True
-                break
-            if time.time() - ts > 120:
-                break
-        if not ok:
-            break
         fed += 1
         if fed % 50 == 0:
             el = time.time() - t0
             print(f"[calib] {fed}/{len(chunks)} chunks, {toks} tok, {el:.0f}s ({toks/el:.0f} tok/s)",
                   flush=True)
 
-    try:
-        proc.stdin.write("quit\n")
-        proc.stdin.flush()
-        proc.wait(timeout=20)
-    except Exception:
-        proc.kill()
+    daemon.quit()
     pr = Path(args.out_profile)
     print(f"[calib] done: fed={fed} tok={toks} -> "
           f"{'SAVED ' + str(pr.stat().st_size) + 'B' if pr.exists() else 'PROFILE MISSING'}: {pr}",

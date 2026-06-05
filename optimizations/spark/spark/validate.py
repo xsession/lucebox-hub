@@ -21,12 +21,15 @@ import os
 import re
 import statistics
 import struct
-import subprocess
-import threading
 import time
 from pathlib import Path
 
 from tokenizers import Tokenizer
+
+try:
+    from ._daemon import Daemon
+except ImportError:  # allow direct `python validate.py`
+    from _daemon import Daemon
 
 
 def write_counted_i32(path, ids):
@@ -50,6 +53,8 @@ def main():
     ap.add_argument("--n-chunks", type=int, default=30)
     ap.add_argument("--max-tok", type=int, default=1024)
     ap.add_argument("--natural", action="store_true", help="stop at EOS (no forced length)")
+    ap.add_argument("--ready-timeout", type=int, default=600)
+    ap.add_argument("--gen-timeout", type=int, default=120)
     args = ap.parse_args()
 
     tk = Tokenizer.from_file(args.tok)
@@ -68,29 +73,12 @@ def main():
         env["DFLASH_LAGUNA_EXPERT_CACHE"] = "1"
         env["DFLASH_LAGUNA_CACHE_SLOTS"] = str(args.cache_slots)
 
-    proc = subprocess.Popen([args.bin, args.gguf, "--max-ctx", str(args.max_ctx)],
-                            env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, bufsize=1, universal_newlines=True)
-    prof, placement = [], []
-
-    def drain():
-        for ln in proc.stderr:
-            if "lag-prof" in ln:
-                prof.append(ln.rstrip())
-    threading.Thread(target=drain, daemon=True).start()
-
-    t0 = time.time()
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            raise SystemExit("daemon died before ready")
-        if "storage ready" in line or "placement result" in line:
-            placement.append(line.rstrip())
-        if "-daemon] ready" in line:
-            break
-        if time.time() - t0 > 600:
-            proc.kill()
-            raise SystemExit("ready timeout")
+    placement = []
+    daemon = Daemon([args.bin, args.gguf, "--max-ctx", str(args.max_ctx)], env, capture_stderr=True)
+    daemon.wait_ready(
+        timeout=args.ready_timeout,
+        on_line=lambda l: placement.append(l.rstrip())
+        if ("storage ready" in l or "placement result" in l) else None)
 
     pp = Path("/tmp/spark_val_chunk.bin")
     op = Path("/tmp/spark_val_out.bin")
@@ -100,30 +88,16 @@ def main():
         if len(ids) < 8:
             continue
         write_counted_i32(pp, ids)
-        proc.stdin.write(f"generate {pp} {args.n_gen} {op}\n")
-        proc.stdin.flush()
-        ts = time.time()
-        okl = None
-        while True:
-            line = proc.stdout.readline()
-            if not line:
-                break
-            if line.startswith("ok ") or line.startswith("err "):
-                okl = line
-                break
-            if time.time() - ts > 120:
-                break
-        if okl and okl.startswith("ok "):
-            m = re.search(r"decode_tok_s=([0-9.]+)", okl)
+        reply = daemon.request(f"generate {pp} {args.n_gen} {op}", timeout=args.gen_timeout)
+        if reply is None:
+            print("daemon stalled/closed; stopping early")
+            break
+        if reply.startswith("ok "):
+            m = re.search(r"decode_tok_s=([0-9.]+)", reply)
             if m:
                 toks.append(float(m.group(1)))
 
-    try:
-        proc.stdin.write("quit\n")
-        proc.stdin.flush()
-        proc.wait(timeout=20)
-    except Exception:
-        proc.kill()
+    daemon.quit()
 
     for p in placement:
         print("PLACEMENT:", p.strip())
@@ -132,7 +106,7 @@ def main():
     if toks:
         print(f"decode tok/s: mean={statistics.mean(toks):.1f} median={statistics.median(toks):.1f} "
               f"over {len(toks)} chunks")
-    colds = [float(m.group(1)) for l in prof
+    colds = [float(m.group(1)) for l in daemon.stderr_lines
              for m in [re.search(r"cold_experts/tok=([0-9.]+)", l)] if m]
     if colds:
         print(f"cold_experts/tok: mean={statistics.mean(colds):.2f} max={max(colds):.2f}")
