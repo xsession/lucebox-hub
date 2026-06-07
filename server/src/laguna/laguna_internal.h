@@ -270,6 +270,24 @@ bool laguna_step(
     bool                        no_mask,
     std::vector<float> &        out_logits);
 
+// Forward decl (full definition in common/moe_hybrid_storage.h).
+struct MoeHybridStorage;
+
+// Single-graph hybrid decode: one full-token graph, MoE layers served from
+// the hot expert stack via per-layer residency LUTs set once. One compute,
+// one logits readback. Does NOT mutate cache.cur_pos (caller increments).
+bool laguna_step_hybrid(
+    ggml_backend_t              backend,
+    const LagunaTargetWeights & w,
+    LagunaTargetCache &         cache,
+    const float *               embed,
+    int                         n_tok,
+    int                         kv_start,
+    bool                        no_mask,
+    const MoeHybridStorage &    hyb,
+    std::vector<float> &        out_logits,
+    std::vector<int32_t> *      out_selected = nullptr);
+
 struct LagunaLayerStepGraph {
     ggml_context * ctx = nullptr;
     ggml_cgraph * gf = nullptr;
