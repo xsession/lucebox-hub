@@ -17,7 +17,7 @@ tok/s** (`spark/bench.py`, bit-identical to all-GPU at full residency).
 Held-out Claude Code sessions, varying the hot budget. `0%` = all experts on GPU
 (no offload).
 
-| Config (held-out) | decode tok/s | % of all-GPU | cold-hit | hot VRAM | VRAM saved |
+| Config (held-out) | decode tok/s | % of all-GPU speed | cold-hit | hot VRAM | VRAM saved |
 |---|---:|---:|---:|---:|---:|
 | All-GPU (100% hot) | 111 | 100% | n/a | 18.8 GiB | 0 |
 | Uniform 60% | 66 | 59% | 36% | 10.6 GiB | ~7 GiB |

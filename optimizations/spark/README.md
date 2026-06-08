@@ -19,14 +19,16 @@
 ---
 
 ```
-Laguna-XS.2 Q4_K_M (33B total MoE) · RTX 3090 · decode at 60% residency
+Laguna-XS.2 Q4_K_M (33B total MoE) · RTX 3090 · 60% of experts resident on GPU
 
-                                tok/s   % all-GPU
-  all on GPU (needs >16 GB)      119       100%
-  naive offload (uniform)         66        55%
-  Spark, calibrated               81        68%
-  Spark + cache + fused decode    100        85%
+                                tok/s   % of all-GPU speed
+  all on GPU (needs >16 GB)      119           100%
+  naive offload (uniform)         66            55%
+  Spark, calibrated               81            68%
+  Spark + cache + fused decode    100           85%
 
+  60% of the experts on the GPU keeps 85% of the full-GPU decode speed.
+  (residency = share of expert weight on GPU; the % column is throughput.)
   reproduce: python -m spark.bench --bin ../../server/build/test_dflash ...
 ```
 
@@ -75,7 +77,7 @@ corpus of real Claude Code sessions; cold-hit rates validated on 60 held-out
 sessions. Decode tok/s reproduce with [`spark/bench.py`](spark/bench.py); full
 methodology in [RESULTS.md](RESULTS.md).
 
-| Config (60% resident) | decode tok/s | % all-GPU | cold-hit | VRAM |
+| Config (60% resident) | decode tok/s | % of all-GPU speed | cold-hit | VRAM |
 |---|---:|---:|---:|---:|
 | All-GPU (needs >16 GB) | 119 | 100% | - | 18.8 GiB |
 | Naive offload (uniform) | 66 | 55% | 36% | ~10.6 GiB |
