@@ -3,15 +3,17 @@
 # ─── Stage 1: builder ───────────────────────────────────────────────────────
 # ROCm/HIP sibling of the CUDA Dockerfile. ROCM_VERSION / UBUNTU_VERSION /
 # DFLASH_HIP_ARCHES are build args so the same Dockerfile can be repinned.
-#   • lucebox-hub:rocm  — ROCm 7.2.x, gfx1151 (+ optional fat gfx list)
+#   • lucebox-hub:rocm  — ROCm 6.4.x, gfx1151 (+ optional fat gfx list)
 # See docker-bake.hcl for the canonical invocation.
 #
-# NOTE: gfx1151 (Strix Halo / Ryzen AI MAX) needs ROCm >= 6.4.1, but the
-# 6.4.x userspace segfaults at model load against a ROCm 7.x host driver
-# (verified on gfx1151 + host ROCm 7.2.2: SIGSEGV in backend creation, bogus
-# 1.28 TB VRAM report). Default to 7.2.2 to match current host stacks; pin
-# back to a 6.4.x tag only for hosts still on a 6.x driver.
-ARG ROCM_VERSION=7.2.2
+# NOTE: gfx1151 (Strix Halo / Ryzen AI MAX) needs ROCm >= 6.4.1. The default
+# stays on 6.4.1 because the 7.2.x stack has shown intermittent problems on
+# Strix Halo. The flip side: against a ROCm 7.x HOST driver the 6.4.x
+# userspace can segfault at model load (seen on gfx1151 + host ROCm 7.2.2:
+# SIGSEGV in backend creation, bogus 1.28 TB VRAM report) — in that case
+# rebuild with ROCM_VERSION=7.2.2 to match the host. Rule of thumb: keep the
+# base's major version aligned with the host driver.
+ARG ROCM_VERSION=6.4.1
 ARG UBUNTU_VERSION=22.04
 FROM rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION} AS builder
 
