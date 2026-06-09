@@ -153,8 +153,7 @@ python3 harness/client_test_runner.py bench \
 
 ## Quick Start With Docker
 
-Prebuilt images on GHCR track `main`. No CUDA toolkit, no build step:
-pull, mount your weights, serve. OpenAI-compatible API on `:8000`.
+Prebuilt images on GHCR track `main`. No CUDA toolkit or build needed. Pull the image, mount weights and serve. OpenAI-compatible API on `:8000`.
 
 <table>
 <tr>
@@ -167,8 +166,8 @@ docker run --rm --gpus all -p 8000:8080 \
   ghcr.io/luce-org/lucebox-hub:cuda12
 ```
 
-Drop a GGUF target into `server/models/` first, then hit
-`:8000/v1/chat/completions`. Full walkthrough in the
+Drop a GGUF model target into `server/models/` first, then
+`:8000/v1/chat/completions`. Full tutorial in the
 [Docker blog](https://lucebox.com/blog/docker).
 
 </td>
