@@ -572,7 +572,7 @@ static std::vector<int32_t> qwen35_score_and_compress(
     constexpr int NGRAM = 4;
     for (int q = q0; q + NGRAM <= S; ++q) {
         int hits = 0;
-        int hit_pos[8];
+        std::vector<int> hit_pos(max_anchor_hits);
         const int search_end = std::max(0, q0 - NGRAM);
         for (int p = 0; p <= search_end && hits <= max_anchor_hits; ++p) {
             bool same = true;
@@ -580,12 +580,12 @@ static std::vector<int32_t> qwen35_score_and_compress(
                 if (ids[(size_t)p + k] != ids[(size_t)q + k]) { same = false; break; }
             }
             if (same) {
-                if (hits < 8) hit_pos[hits] = p;
+                if (hits < max_anchor_hits) hit_pos[hits] = p;
                 ++hits;
             }
         }
         if (hits > 0 && hits <= max_anchor_hits) {
-            for (int i = 0; i < hits && i < 8; ++i) {
+            for (int i = 0; i < hits && i < max_anchor_hits; ++i) {
                 force_chunk_neighborhood(forced, n_chunks, hit_pos[i] / chunk_size, anchor_radius);
             }
         }
@@ -772,7 +772,7 @@ std::vector<int32_t> drafter_score_and_compress(
     constexpr int NGRAM = 4;
     for (int q = q0; q + NGRAM <= S; ++q) {
         int hits = 0;
-        int hit_pos[8];
+        std::vector<int> hit_pos(max_anchor_hits);
         const int search_end = std::max(0, q0 - NGRAM);
         for (int p = 0; p <= search_end && hits <= max_anchor_hits; ++p) {
             bool same = true;
@@ -780,12 +780,12 @@ std::vector<int32_t> drafter_score_and_compress(
                 if (ids[(size_t)p + k] != ids[(size_t)q + k]) { same = false; break; }
             }
             if (same) {
-                if (hits < 8) hit_pos[hits] = p;
+                if (hits < max_anchor_hits) hit_pos[hits] = p;
                 ++hits;
             }
         }
         if (hits > 0 && hits <= max_anchor_hits) {
-            for (int i = 0; i < hits && i < 8; ++i) {
+            for (int i = 0; i < hits && i < max_anchor_hits; ++i) {
                 force_chunk_neighborhood(forced, n_chunks, hit_pos[i] / chunk_size, anchor_radius);
             }
         }
