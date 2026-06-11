@@ -1943,9 +1943,14 @@ void HttpServer::worker_loop() {
         // verbatim system prompt becomes a stable KV cache anchor.
         // Inert-guard: only runs when the aged band >= 512 tokens.
         // compress=false → byte-identical to pr364-base.
-        if (req.disk_cache_policy.compress &&
-            drafter_tokenizer_ != nullptr &&
-            req.messages.is_array())
+        if (pflash_compressed) {
+            std::fprintf(stderr,
+                "[flowkv] skipped (pflash already compressed, effective=%zu)\n",
+                effective_prompt.size());
+        } else if (req.disk_cache_policy.compress &&
+                   (int)req.prompt_tokens.size() >= config_.pflash_threshold && // gate FlowKV on original prompt size, same as pFlash
+                   drafter_tokenizer_ != nullptr &&
+                   req.messages.is_array())
         {
             // Detect continuation (any prior assistant turn / tool result).
             bool fkv_is_continuation = false;
@@ -2454,8 +2459,11 @@ void HttpServer::worker_loop() {
         // This keeps the disk key and snapshot position aligned; unlike the
         // legacy full-prompt key path, scoped entries must not point at a
         // longer snapshot than their token hash covers.
+        if (pflash_compressed && disk_policy.compress) {
+            std::fprintf(stderr, "[flowkv] WS-compose: scoped disk re-prefill skipped under compression (cross-session disk deferred)\n");
+        }
         if (!using_restore && !disk_cache_.disabled() &&
-            selected_prefix_boundary > 0) {
+            selected_prefix_boundary > 0 && !(pflash_compressed && disk_policy.compress)) {
             const int scoped_boundary = selected_prefix_boundary;
             if (scoped_boundary > 0) {
                 std::fprintf(stderr,
