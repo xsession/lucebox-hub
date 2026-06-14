@@ -413,6 +413,33 @@ int main(int argc, char ** argv) {
             bargs.fast_rollback = true;
         } else if (std::strcmp(argv[i], "--ddtree-budget") == 0 && i + 1 < argc) {
             bargs.ddtree_budget = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "--kvflash") == 0 && i + 1 < argc) {
+            // Bounded KV residency: attention KV lives in a fixed pool of N
+            // tokens; cold 64-token chunks page to host. Works with or
+            // without pflash (drafter becomes the reselect scorer when
+            // loaded; plain LRU otherwise). Forces AR decode.
+            ++i;
+            if (std::strcmp(argv[i], "auto") != 0 && std::atoi(argv[i]) <= 0) {
+                std::fprintf(stderr, "--kvflash expects a positive token count or "
+                                     "'auto', got '%s'\n", argv[i]);
+                return 1;
+            }
+            ::setenv("DFLASH_KVFLASH", argv[i], 1);
+        } else if (std::strcmp(argv[i], "--kvflash-policy") == 0 && i + 1 < argc) {
+            ++i;
+            if (std::strcmp(argv[i], "drafter") != 0 && std::strcmp(argv[i], "lru") != 0) {
+                std::fprintf(stderr, "--kvflash-policy expects 'drafter' or 'lru', got '%s'\n",
+                             argv[i]);
+                return 1;
+            }
+            ::setenv("DFLASH_KVFLASH_POLICY", argv[i], 1);
+        } else if (std::strcmp(argv[i], "--kvflash-tau") == 0 && i + 1 < argc) {
+            if (std::atoi(argv[++i]) <= 0) {
+                std::fprintf(stderr, "--kvflash-tau expects a positive interval, got '%s'\n",
+                             argv[i]);
+                return 1;
+            }
+            ::setenv("DFLASH_KVFLASH_TAU", argv[i], 1);
         } else if (std::strcmp(argv[i], "--spark") == 0) {
             spark_autotune = true;
         } else if (std::strcmp(argv[i], "--spark-slots") == 0 && i + 1 < argc) {
@@ -464,6 +491,9 @@ int main(int argc, char ** argv) {
             sconfig.pflash_keep_ratio = (float)std::atof(argv[++i]);
         } else if (std::strcmp(argv[i], "--prefill-drafter") == 0 && i + 1 < argc) {
             sconfig.pflash_drafter_path = argv[++i];
+            // kvflash reads this to lazy-attach the drafter as its
+            // residency scorer even when prefill compression is off.
+            ::setenv("DFLASH_KVFLASH_DRAFTER", argv[i], 1);
         } else if (std::strcmp(argv[i], "--prefill-skip-park") == 0) {
             sconfig.pflash_skip_park = true;
         } else if (std::strcmp(argv[i], "--prefill-upstream-base") == 0 && i + 1 < argc) {

@@ -40,6 +40,10 @@ Each one is self-contained with setup instructions and benchmark notes.
   <a href="optimizations/spark/"><img src="assets/cards/spark_card.png" alt="Luce Spark MoE expert offload" width="46%"></a>
 </p>
 
+<p align="center">
+  <a href="optimizations/kvflash/"><img src="assets/cards/kvflash_card.png" alt="Luce KVFlash paged KV cache" width="46%"></a>
+</p>
+
 ---
 
 ## Supported Models & Drafters
@@ -279,6 +283,18 @@ When compression is on, the request path picks one of three modes automatically,
 | `--prefix-cache-slots N` | — | Live prefix-cache slot count |
 | `--kv-cache-dir <path>` | — | Persist prefix cache to disk |
 | `--kv-cache-budget N` | — | On-disk cache size cap |
+
+**Bounded KV residency (KVFlash)**
+
+Pages the attention KV cache through a fixed pool of GPU slots; cold 64-token chunks live in host RAM, bit-exact and recallable. Decode speed stops depending on context length and resident KV stays pool-sized at any context. Off by default; works on every model family. Drafter-scored residency is the default on every family: the server finds the Qwen3-0.6B drafter next to the model (or via `--prefill-drafter`) and lazy-loads it as the relevance scorer that decides which chunks stay resident — non-qwen targets (laguna, gemma4) bridge the tokenizer gap by re-tokenizing the context text for the drafter. LRU is the fallback when no drafter is present, or the explicit choice via `--kvflash-policy lru`. Per-model numbers in [Luce KVFlash →](optimizations/kvflash/README.md).
+
+| Flag / env | Default | Effect |
+|---|---|---|
+| `--kvflash <tokens\|auto>` | off | Resident pool size. `auto` sizes from the GPU: half of free VRAM after weights and reserves, at the model's KV density, capped where decode speed stays near the flat optimum (default 16384, override `DFLASH_KVFLASH_MAX_POOL`) and at `--max-ctx`. Explicit values are rounded to 256, clamped to `--max-ctx`, floored at the protected minimum so eviction always has a victim. |
+| `--kvflash-policy {drafter,lru}` | `drafter` | Residency policy. `lru` opts out of the drafter probe/load (recency-only paging, no extra VRAM). |
+| `--kvflash-tau N` | `64` | Reselect interval floor (drafter policy only); the effective interval grows with history to cap rescore overhead. |
+| `DFLASH_KVFLASH=N` | off | Env equivalent of `--kvflash`. |
+| `DFLASH_KVFLASH_TAU=N` | `64` | Env equivalent of `--kvflash-tau`. |
 
 **Thinking budget**
 
